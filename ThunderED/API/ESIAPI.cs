@@ -220,8 +220,9 @@ namespace ThunderED.API
             ssoClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         }
 
-        public async Task<string> RefreshToken(string refreshToken, string clientId, string secret)
-        {
+        public async Task<ESIQueryResult<string>> RefreshToken(string refreshToken, string clientId, string secret)
+        { 
+            var result = new ESIQueryResult<string>();
             try
             {
                 using (var ssoClient = new HttpClient())
@@ -231,25 +232,36 @@ namespace ThunderED.API
 
                     var values = new Dictionary<string, string> {{"grant_type", "refresh_token"}, {"refresh_token", $"{refreshToken}"}};
                     var content = new FormUrlEncodedContent(values);
-                    using (var tokenresponse = await ssoClient.PostAsync("https://login.eveonline.com/oauth/token", content))
+                    using (var responseMessage = await ssoClient.PostAsync("https://login.eveonline.com/oauth/token", content))
                     {
-                        var raw = await tokenresponse.Content.ReadAsStringAsync();
-                        if (!tokenresponse.IsSuccessStatusCode)
+                        var raw = await responseMessage.Content.ReadAsStringAsync();
+                        if (!responseMessage.IsSuccessStatusCode)
                         {
                             if (raw.StartsWith("{\"error\""))
                             {
                                 await LogHelper.LogWarning($"[TOKEN] Request failure: {raw}", LogCat.ESI);
+                                result.Data.ErrorCode = -99;
+                                result.Data.Message = "Valid ESI request error";
                             }
-                            return null;
+                            else
+                            {
+                                result.Data.ErrorCode = (int)responseMessage.StatusCode;
+                                result.Data.Message = responseMessage.StatusCode.ToString();
+                            }
+                            return result;
                         }
-                        return (string) JObject.Parse(raw)["access_token"];
+
+                        result.Result = (string)JObject.Parse(raw)["access_token"];
+                        return result;
                     }
                 }
             }
             catch (Exception ex)
             {
                 await LogHelper.LogEx("RefreshToken", ex, LogCat.ESI);
-                return null;
+                result.Data.ErrorCode = -1;
+                result.Data.Message = "Unexpected exception";
+                return result;
             }
         }
 
@@ -466,22 +478,22 @@ namespace ThunderED.API
         }
 
 
-        public async Task<List<JsonClasses.Contact>> GetCharacterContacts(string reason, object id, string token)
+        public async Task<ESIQueryResult<List<JsonClasses.Contact>>> GetCharacterContacts(string reason, object id, string token)
         {
             var authHeader = $"Bearer {token}";
-            return await APIHelper.RequestWrapper<List<JsonClasses.Contact>>($"{SettingsManager.Settings.Config.ESIAddress}latest/characters/{id}/contacts/?datasource=tranquility&language={_language}", reason, authHeader);
+            return await APIHelper.ESIRequestWrapper<List<JsonClasses.Contact>>($"{SettingsManager.Settings.Config.ESIAddress}latest/characters/{id}/contacts/?datasource=tranquility&language={_language}", reason, authHeader);
         }
 
-        public async Task<List<JsonClasses.Contact>> GetCorpContacts(string reason, object id, string token)
+        public async Task<ESIQueryResult<List<JsonClasses.Contact>>> GetCorpContacts(string reason, object id, string token)
         {
             var authHeader = $"Bearer {token}";
-            return await APIHelper.RequestWrapper<List<JsonClasses.Contact>>($"{SettingsManager.Settings.Config.ESIAddress}latest/corporations/{id}/contacts/?datasource=tranquility&language={_language}", reason, authHeader);
+            return await APIHelper.ESIRequestWrapper<List<JsonClasses.Contact>>($"{SettingsManager.Settings.Config.ESIAddress}latest/corporations/{id}/contacts/?datasource=tranquility&language={_language}", reason, authHeader);
         }
 
-        public async Task<List<JsonClasses.Contact>> GetAllianceContacts(string reason, object id, string token)
+        public async Task<ESIQueryResult<List<JsonClasses.Contact>>> GetAllianceContacts(string reason, object id, string token)
         {
             var authHeader = $"Bearer {token}";
-            return await APIHelper.RequestWrapper<List<JsonClasses.Contact>>($"{SettingsManager.Settings.Config.ESIAddress}latest/alliances/{id}/contacts/?datasource=tranquility&language={_language}", reason, authHeader);
+            return await APIHelper.ESIRequestWrapper<List<JsonClasses.Contact>>($"{SettingsManager.Settings.Config.ESIAddress}latest/alliances/{id}/contacts/?datasource=tranquility&language={_language}", reason, authHeader);
         }
 
         public async Task<JsonClasses.SkillsData> GetCharSkills(string reason, object id, string token)

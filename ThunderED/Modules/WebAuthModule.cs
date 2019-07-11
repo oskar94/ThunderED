@@ -91,12 +91,22 @@ namespace ThunderED.Modules
                         {
                             var st = await SQLHelper.LoadAuthStands(numericCharId);
                             if (st == null) return;
-                            var token = await APIHelper.ESIAPI.RefreshToken(st.Token, Settings.WebServerModule.CcpAppClientId, Settings.WebServerModule.CcpAppSecret);
+                            var tq = await APIHelper.ESIAPI.RefreshToken(st.Token, Settings.WebServerModule.CcpAppClientId, Settings.WebServerModule.CcpAppSecret);
+                            var token = tq.Result;
 
-                            await RefreshStandings(st, token);
-                            await SQLHelper.DeleteAuthStands(numericCharId);
-                            await SQLHelper.SaveAuthStands(st);
-                            sb.Append($"{numericCharId},");
+                            if (!tq.Data.IsFailed)
+                            {
+                                await RefreshStandings(st, token);
+                                await SQLHelper.DeleteAuthStands(numericCharId);
+                                await SQLHelper.SaveAuthStands(st);
+                                sb.Append($"{numericCharId},");
+                            }
+                            else
+                            {
+                                await LogHelper.LogWarning($"Token fetch error while standings update! Skipping update. {tq.Data.ErrorCode} ({tq.Data.Message})", Category);
+                                if(tq.Data.IsNotValid)
+                                    await LogHelper.LogWarning($"Standings update token for character {numericCharId} is invalid or outdated. Please reauth!", Category);
+                            }
                         }
 
                         if (sb.Length > 0)
@@ -132,7 +142,7 @@ namespace ThunderED.Modules
             var list = await SQLHelper.GetOutdatedAwaitingAuthUsers();
             foreach (var user in list)
             {
-                var group = Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Key == user.GroupName).Value;
+                var group = GetGroupByName(user.GroupName).Value;
                 if (group == null)
                 {
                     await SQLHelper.DeleteAuthDataByCharId(user.CharacterId);
@@ -144,6 +154,7 @@ namespace ThunderED.Modules
                     if (Settings.Config.ModuleHRM && Settings.HRMModule.UseDumpForMembers)
                     {
                         user.SetStateDumpster();
+                        await LogHelper.LogInfo($"Moving outdated applicant {user.Data.CharacterName} to dumpster...");
                         await SQLHelper.SaveAuthUser(user);
                     }
                     else await SQLHelper.DeleteAuthDataByCharId(user.CharacterId);
@@ -220,128 +231,11 @@ namespace ThunderED.Modules
             return result;
         }
 
-
-      /*  public static async Task<AuthRoleEntity> GetAuthRoleEntityById(Dictionary<string, WebAuthGroup> groups, long id, MemberTypeEnum type)
-        {
-            groups = groups ?? SettingsManager.Settings.WebAuthModule.AuthGroups;
-            foreach (var (groupName, group) in groups)
-            {
-                if (group.StandingsAuth == null)
-                {
-                    foreach (var (entityName, entity) in group.AllowedMembers)
-                    {
-                        var list = type == MemberTypeEnum.Corporation
-                            ? Instance.GetTier2CorporationIds(Instance.ParsedMembersLists, groupName, entityName)
-                            : (type == MemberTypeEnum.Character
-                                ? Instance.GetTier2CharacterIds(Instance.ParsedMembersLists, groupName, entityName)
-                                : Instance.GetTier2AllianceIds(Instance.ParsedMembersLists, groupName, entityName));
-                        //if found match or it is a guest entity (empty)
-                        if (list.Contains(id) || !entity.Entities.Any())
-                            return entity;
-                    }
-                }
-                else
-                {
-                    return await GetEntityForStandingsAuth(group, id, type);
-                }
-            }
-
-            return null;
-        }*/
-
         public static async Task<WebAuthResult> GetAuthRoleEntityById(KeyValuePair<string, WebAuthGroup> group, JsonClasses.CharacterData chData)
         {
             var (key, value) = @group;
             return await GetAuthRoleEntityById(new Dictionary<string, WebAuthGroup> {{key, value}}, chData);
         }
-
-       /* public static async Task<AuthRoleEntity> GetCorpEntityById(Dictionary<string, WebAuthGroup> groups, long id)
-        {
-            groups = groups ?? SettingsManager.Settings.WebAuthModule.AuthGroups;
-            foreach (var (groupName, group) in groups)
-            {
-                if (group.StandingsAuth == null)
-                {
-                    foreach (var (entityName, entity) in group.AllowedMembers)
-                    {
-                        var list = Instance.GetTier2CorporationIds(Instance.ParsedMembersLists, groupName, entityName);
-                        if (list.Contains(id))
-                            return entity;
-                    }
-                }
-                else
-                {
-                    return await GetEntityForStandingsAuth(group, id, 1);
-                }
-            }
-
-            return null;
-        }
-
-        public static async Task<AuthRoleEntity> GetCharEntityById(Dictionary<string, WebAuthGroup> groups, long id)
-        {
-            groups = groups ?? SettingsManager.Settings.WebAuthModule.AuthGroups;
-            foreach (var (groupName, group) in groups)
-            {
-                if (group.StandingsAuth == null)
-                {
-                    foreach (var (entityName, entity) in group.AllowedMembers)
-                    {
-                        var list = Instance.GetTier2CharacterIds(Instance.ParsedMembersLists, groupName, entityName);
-                        if (list.Contains(id))
-                            return entity;
-                    }
-                }
-                else
-                {
-                    return await GetEntityForStandingsAuth(group, id, 0);
-                }
-            }
-
-            return null;
-        }
-
-        public static async Task<AuthRoleEntity> GetAllyEntityById(Dictionary<string, WebAuthGroup> groups,long id)
-        {
-            groups = groups ?? SettingsManager.Settings.WebAuthModule.AuthGroups;
-            foreach (var (groupName, group) in groups)
-            {
-                if (group.StandingsAuth == null)
-                {
-                    foreach (var (entityName, entity) in group.AllowedMembers)
-                    {
-                        var list = Instance.GetTier2AllianceIds(Instance.ParsedMembersLists, groupName, entityName);
-                        if (list.Contains(id))
-                            return entity;
-                    }
-                }
-                else
-                {
-                    return await GetEntityForStandingsAuth(group, id, 2);
-                }
-            }
-
-            return null;
-        }
-
-        public static async Task<AuthRoleEntity> GetAllyEntityById(KeyValuePair<string, WebAuthGroup> group, long id)
-        {
-            var (key, value) = @group;
-            return await GetAllyEntityById(new Dictionary<string, WebAuthGroup> {{key, value}}, id);
-        }
-
-        public static async Task<AuthRoleEntity> GetCorpEntityById(KeyValuePair<string, WebAuthGroup> group, long id)
-        {
-            var (key, value) = @group;
-            return await GetCorpEntityById(new Dictionary<string, WebAuthGroup> {{key, value}}, id);
-        }
-
-        public static async Task<AuthRoleEntity> GetCharEntityById(KeyValuePair<string, WebAuthGroup> group, long id)
-        {
-            var (key, value) = @group;
-            return await GetCharEntityById(new Dictionary<string, WebAuthGroup> {{key, value}}, id);
-        }
-        */
 
         private static async Task<List<AuthRoleEntity>> GetEntityForStandingsAuth(WebAuthGroup group, JsonClasses.CharacterData chData) //0 personal, 1 corp, 2 ally, 3 faction
         {
@@ -417,60 +311,11 @@ namespace ThunderED.Modules
             return result.RoleEntities.Any() ? new WebAuthResult {GroupName = result.GroupName, Group = result.Group, RoleEntities = result.RoleEntities} : null;
         }
 
-      /*  public static async Task<WebAuthResult> GetAuthGroupByCorpId(Dictionary<string, WebAuthGroup> groups, long id)
-        {
-            groups = groups ?? SettingsManager.Settings.WebAuthModule.AuthGroups;
-            var eResult = await GetCorpEntityById(groups, id);
-            var result = eResult == null ? null : groups.FirstOrDefault(a => a.Value.AllowedMembers.ContainsValue(eResult)).Value;
-            if (result != null) return new WebAuthResult {Group = result, RoleEntity = eResult};
-
-            foreach (var (groupName, group) in groups.Where(a=> a.Value.StandingsAuth != null))
-            {
-                var res = await GetEntityForStandingsAuth(group, id, 1);
-                if (res != null) return new WebAuthResult {Group = group, RoleEntity = res };
-            }
-
-            return null;
-        }
-
-        public static async Task<WebAuthResult> GetAuthGroupByCharacterId(Dictionary<string, WebAuthGroup> groups, long id)
-        {
-            groups = groups ?? SettingsManager.Settings.WebAuthModule.AuthGroups;
-            var eResult = await GetCharEntityById(groups, id);
-            var result = eResult == null ? null : groups.FirstOrDefault(a => a.Value.AllowedMembers.ContainsValue(eResult)).Value;
-            if (result != null) return new WebAuthResult {Group = result, RoleEntity = eResult};
-
-            foreach (var (groupName, group) in groups.Where(a=> a.Value.StandingsAuth != null))
-            {
-                var res = await GetEntityForStandingsAuth(group, id, 0);
-                if (res != null) return new WebAuthResult {Group = group, RoleEntity = res };
-            }
-
-            return null;
-        }
-
-
-        public static async Task<WebAuthResult> GetAuthGroupByAllyId(Dictionary<string, WebAuthGroup>groups, long id)
-        {
-            groups = groups ?? SettingsManager.Settings.WebAuthModule.AuthGroups;
-            var eResult = await GetAllyEntityById(groups, id);
-            var result = eResult == null ? null : groups.FirstOrDefault(a => a.Value.AllowedMembers.ContainsValue(eResult)).Value;
-            if (result != null) return new WebAuthResult {Group = result, RoleEntity = eResult};
-
-            foreach (var (groupName, group) in groups.Where(a=> a.Value.StandingsAuth != null))
-            {
-                var res = await GetEntityForStandingsAuth(group, id, 2);
-                if (res != null) return new WebAuthResult {Group = group, RoleEntity = res };
-            }
-
-            return null;
-        }*/
-
         public async Task ProcessPreliminaryApplicant(AuthUserEntity user, ICommandContext context = null)
         {
             try
             {
-                var group = Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Key == user.GroupName);
+                var group = GetGroupByName(user.GroupName);
                 if (group.Value == null)
                 {
                     await LogHelper.LogWarning($"Group {user.GroupName} not found for character {user.Data.CharacterName} awaiting auth...");
@@ -500,7 +345,7 @@ namespace ThunderED.Modules
                     }
 
                     //auth
-                    await AuthUser(context, user.RegCode, user.DiscordId, false);
+                    await AuthUser(context, user.RegCode, user.DiscordId);
                 }
             }
             catch (Exception ex)
@@ -578,18 +423,18 @@ namespace ThunderED.Modules
                     }
 
                     var groupName = HttpUtility.UrlDecode(prms[0].Split('=')[1]);//string.IsNullOrEmpty(Settings.WebAuthModule.DefaultAuthGroup) || !Settings.WebAuthModule.AuthGroups.ContainsKey(Settings.WebAuthModule.DefaultAuthGroup) ? Settings.WebAuthModule.AuthGroups.Keys.FirstOrDefault() : Settings.WebAuthModule.DefaultAuthGroup;
-                    if (!Settings.WebAuthModule.AuthGroups.ContainsKey(groupName) && !DEF_NOGROUP_NAME.Equals(groupName)&& !DEF_ALTREGGROUP_NAME.Equals(groupName))
+                    if (!Settings.WebAuthModule.AuthGroups.Keys.ContainsCaseInsensitive(groupName) && !DEF_NOGROUP_NAME.Equals(groupName)&& !DEF_ALTREGGROUP_NAME.Equals(groupName))
                     {
                         await WebServerModule.WriteResponce(WebServerModule.Get404Page(), response);
                         return true;
                     }
 
-                    if (!Settings.WebAuthModule.AuthGroups.ContainsKey(groupName) && DEF_NOGROUP_NAME.Equals(groupName))
+                    if (!Settings.WebAuthModule.AuthGroups.Keys.ContainsCaseInsensitive(groupName) && DEF_NOGROUP_NAME.Equals(groupName))
                     {
                         var url = WebServerModule.GetAuthUrlOneButton();
                         await response.RedirectAsync(new Uri(url));
                     }
-                    else if (!Settings.WebAuthModule.AuthGroups.ContainsKey(groupName) && DEF_ALTREGGROUP_NAME.Equals(groupName))
+                    else if (!Settings.WebAuthModule.AuthGroups.Keys.ContainsCaseInsensitive(groupName) && DEF_ALTREGGROUP_NAME.Equals(groupName))
                     {
 
                         var url = WebServerModule.GetAuthUrlAltRegButton();
@@ -603,7 +448,7 @@ namespace ThunderED.Modules
                     }
                     else
                     {
-                        var grp = Settings.WebAuthModule.AuthGroups[groupName];
+                        var grp = GetGroupByName(groupName).Value;
                         var url = grp.MustHaveGroupName || (Settings.WebAuthModule.UseOneAuthButton && grp.ExcludeFromOneButtonMode)
                             ? WebServerModule.GetCustomAuthUrl(grp.ESICustomAuthRoles, groupName)
                             : WebServerModule.GetAuthUrl();
@@ -651,7 +496,7 @@ namespace ThunderED.Modules
                         return true;
                     }
 
-                    if (Settings.WebAuthModule.AuthGroups.Values.All(g => g.StandingsAuth == null ||  !g.StandingsAuth.CharacterIDs.Contains(numericCharId)))
+                    if (Settings.WebAuthModule.AuthGroups.Values.All(g => g.StandingsAuth == null || !g.StandingsAuth.CharacterIDs.Contains(numericCharId)))
                     {
                         await LogHelper.LogWarning($"Unathorized auth stands feed request from {characterID}");
                         await WebServerModule.WriteResponce(File.ReadAllText(SettingsManager.FileTemplateAuthNotifyFail)
@@ -666,9 +511,11 @@ namespace ThunderED.Modules
                     await SQLHelper.DeleteAuthStands(numericCharId);
                     var data = new AuthStandsEntity {CharacterID = numericCharId, Token = result[1]};
 
-                    var token = await APIHelper.ESIAPI.RefreshToken(data.Token, Settings.WebServerModule.CcpAppClientId, Settings.WebServerModule.CcpAppSecret);
+                    var tq = await APIHelper.ESIAPI.RefreshToken(data.Token, Settings.WebServerModule.CcpAppClientId, Settings.WebServerModule.CcpAppSecret);
+                    var token = tq.Result;
 
-                    await RefreshStandings(data, token);
+                    if(!tq.Data.IsFailed)
+                        await RefreshStandings(data, token);
                     await SQLHelper.SaveAuthStands(data);
                     
                     await LogHelper.LogInfo($"Auth stands feed added for character: {characterID}({rChar.name})", LogCat.AuthWeb);
@@ -706,7 +553,7 @@ namespace ThunderED.Modules
                         }
 
                         var inputGroupName = state?.Length > 1 ? HttpUtility.UrlDecode(state.Substring(1, state.Length - 1)) : null;
-                        var inputGroup = Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Key.Equals(inputGroupName, StringComparison.OrdinalIgnoreCase)).Value;
+                        var inputGroup = GetGroupByName(inputGroupName).Value;
                         var autoSearchGroup = inputGroup == null && (state?.Equals("oneButton") ?? false);
                         var altCharReg = inputGroup == null && (state?.Equals("altReg") ?? false);
 
@@ -977,10 +824,20 @@ namespace ThunderED.Modules
 
         private async Task RefreshStandings(AuthStandsEntity data, string token)
         {
-            data.PersonalStands = await APIHelper.ESIAPI.GetCharacterContacts(Reason, data.CharacterID, token);
+            var stands = await APIHelper.ESIAPI.GetCharacterContacts(Reason, data.CharacterID, token);
+            data.PersonalStands = stands.Data.IsFailed ? data.PersonalStands : stands.Result;
             var rChar = await APIHelper.ESIAPI.GetCharacterData(Reason, data.CharacterID, true);
-            data.CorpStands = await APIHelper.ESIAPI.GetCorpContacts(Reason, rChar?.corporation_id ?? 0, token);
-            data.AllianceStands = await APIHelper.ESIAPI.GetAllianceContacts(Reason, rChar?.alliance_id ?? 0, token);
+            if (rChar != null)
+            {
+                stands = await APIHelper.ESIAPI.GetCorpContacts(Reason, rChar.corporation_id, token);
+                data.CorpStands = stands.Data.IsFailed ? data.CorpStands : stands.Result;
+                if (rChar.alliance_id.HasValue)
+                {
+                    stands = await APIHelper.ESIAPI.GetAllianceContacts(Reason, rChar.alliance_id.Value, token);
+                    data.AllianceStands = stands.Data.IsFailed ? data.AllianceStands : stands.Result;
+                }
+                else data.AllianceStands = new List<JsonClasses.Contact>();
+            }
         }
 
         public static string GetUniqID()
@@ -1002,7 +859,42 @@ namespace ThunderED.Modules
         }
 
 
-        internal static async Task AuthUser(ICommandContext context, string remainder, ulong discordId, bool isManualAuth)
+        private static async Task AuthInfoLog(object charId, string message, bool isOptional = false)
+        {
+            if(!isOptional || SettingsManager.Settings.WebAuthModule.EnableDetailedLogging)
+                await LogHelper.LogInfo($"[CH{charId}]: {message}", LogCat.AuthCheck);
+        }
+
+        private static async Task AuthInfoLog(JsonClasses.CharacterData ch, string message, bool isOptional = false)
+        {
+            if(!isOptional || SettingsManager.Settings.WebAuthModule.EnableDetailedLogging)
+                await LogHelper.LogInfo($"[{ch.character_id}|{ch.name}]: {message}", LogCat.AuthCheck);
+        }
+        private static async Task AuthInfoLog(AuthUserEntity ch, string message, bool isOptional = false)
+        {
+            if(!isOptional || SettingsManager.Settings.WebAuthModule.EnableDetailedLogging)
+                await LogHelper.LogInfo($"[{ch.CharacterId}|{ch.Data.CharacterName}]: {message}", LogCat.AuthCheck);
+        }
+
+        private static async Task AuthWarningLog(object charId, string message, bool isOptional = false)
+        {
+            if(!isOptional || SettingsManager.Settings.WebAuthModule.EnableDetailedLogging)
+                await LogHelper.LogWarning($"[CH{charId}]: {message}", LogCat.AuthCheck);
+        }
+        private static async Task AuthWarningLog(JsonClasses.CharacterData ch, string message, bool isOptional = false)
+        {
+            if(!isOptional || SettingsManager.Settings.WebAuthModule.EnableDetailedLogging)
+                await LogHelper.LogWarning($"[{ch.character_id}|{ch.name}]: {message}", LogCat.AuthCheck);
+        }
+
+        private static async Task AuthWarningLog(AuthUserEntity ch, string message, bool isOptional = false)
+        {
+            if(!isOptional || SettingsManager.Settings.WebAuthModule.EnableDetailedLogging)
+                await LogHelper.LogWarning($"[{ch.CharacterId}|{ch.Data.CharacterName}]: {message}", LogCat.AuthCheck);
+        }
+
+
+        internal static async Task AuthUser(ICommandContext context, string remainder, ulong discordId)
         {
             JsonClasses.CharacterData characterData = null;
             try
@@ -1013,12 +905,14 @@ namespace ThunderED.Modules
                 var authUser = !string.IsNullOrEmpty(remainder) ? await SQLHelper.GetAuthUserByRegCode(remainder) : await SQLHelper.GetAuthUserByDiscordId(discordId);
                 if (authUser == null)
                 {
+                    await AuthWarningLog(discordId, $"Failed to get authUser from `{remainder}` or by Discord ID");
                     if(context != null)
                         await APIHelper.DiscordAPI.ReplyMessageAsync(context, context.Channel, LM.Get("authHasInvalidKey", SettingsManager.Settings.Config.BotDiscordCommandPrefix), true).ConfigureAwait(false);
                     return;
                 }
                 if(authUser.IsAuthed || string.IsNullOrEmpty(authUser.RegCode))
                 {
+                    await AuthWarningLog(authUser, authUser.IsAuthed ? "User already authenticated" : "Specified reg code is empty");
                     if(context != null)
                         await APIHelper.DiscordAPI.ReplyMessageAsync(context, context.Channel,LM.Get("authHasInactiveKey", SettingsManager.Settings.Config.BotDiscordCommandPrefix), true).ConfigureAwait(false);
                     return;
@@ -1026,11 +920,15 @@ namespace ThunderED.Modules
 
                 if (authUser.Data.PermissionsList.Any())
                 {
-                    var token = await APIHelper.ESIAPI.RefreshToken(authUser.RefreshToken, SettingsManager.Settings.WebServerModule.CcpAppClientId,
-                        SettingsManager.Settings.WebServerModule.CcpAppSecret);
+                    var token = (await APIHelper.ESIAPI.RefreshToken(authUser.RefreshToken, SettingsManager.Settings.WebServerModule.CcpAppClientId,
+                        SettingsManager.Settings.WebServerModule.CcpAppSecret))?.Result;
                     //delete char if token is invalid
                     if (string.IsNullOrEmpty(token))
                     {
+                        //just reauth... if happens
+                        await AuthWarningLog(authUser, $"Character has invalid token and will be deleted from DB.");
+                        if(context != null)
+                            await APIHelper.DiscordAPI.ReplyMessageAsync(context, context.Channel,LM.Get("authUnableToCompleteTryAgainLater"), true).ConfigureAwait(false);
                         await SQLHelper.DeleteAuthDataByCharId(authUser.CharacterId);
                         return;
                     }
@@ -1038,14 +936,32 @@ namespace ThunderED.Modules
                
 
                 //check if we fit some group
-                var result = await GetRoleGroup(authUser.CharacterId, discordId, isManualAuth, authUser.RefreshToken);
-                var groupName = result?.GroupName;
-                //pass auth
-                if (!string.IsNullOrEmpty(groupName))
+                var result = await GetRoleGroup(authUser.CharacterId, discordId, authUser.RefreshToken);
+                if (result.IsConnectionError)
                 {
-                    var group = SettingsManager.Settings.WebAuthModule.AuthGroups[groupName];
+                    await AuthWarningLog(authUser, $"Possible connection error while processing auth request(search for group)!");
+                    await APIHelper.DiscordAPI.ReplyMessageAsync(context, context.Channel,LM.Get("authUnableToCompleteTryAgainLater"), true).ConfigureAwait(false);
+                    return;
+                }
+
+                await AuthInfoLog(authUser, $"GRPFETCH GROUP: {result.GroupName} ROLES: {(result.UpdatedRoles == null || !result.UpdatedRoles.Any() ? "null" : string.Join(',', result.UpdatedRoles?.Select(a=> a.Name)))} MANUAL: {(result.UpdatedRoles == null || !result.UpdatedRoles.Any() ? "null" : string.Join(',', result.ValidManualAssignmentRoles))}", true);
+
+                //var groupName = result?.GroupName;
+                //pass auth
+                if (!string.IsNullOrEmpty(result?.GroupName))
+                {
+                    var group = result.Group;
                     var channel = context?.Channel?.Id ?? SettingsManager.Settings.WebAuthModule.AuthReportChannel;
                     characterData = await APIHelper.ESIAPI.GetCharacterData("Auth", authUser.CharacterId);
+
+                    if (characterData == null)
+                    {
+                        await AuthWarningLog(authUser, $"Unable to get character {authUser.CharacterId} from ESI. Aborting auth.");
+                        if(context != null)
+                            await APIHelper.DiscordAPI.ReplyMessageAsync(context, context.Channel,LM.Get("authUnableToCompleteTryAgainLater"), true).ConfigureAwait(false);
+                        //await SQLHelper.DeleteAuthDataByCharId(authUser.CharacterId);
+                        return;
+                    }
                     
                     //report to discord
                     var reportChannel = SettingsManager.Settings.WebAuthModule.AuthReportChannel;
@@ -1053,13 +969,12 @@ namespace ThunderED.Modules
                     {
                         var mention = group.DefaultMention;
                         if (group.PreliminaryAuthMode)
-                            await APIHelper.DiscordAPI.SendMessageAsync(reportChannel, $"{mention} {LM.Get("grantRolesPrelMessage", characterData.name, groupName)}")
+                            await APIHelper.DiscordAPI.SendMessageAsync(reportChannel, $"{mention} {LM.Get("grantRolesPrelMessage", characterData.name, result.GroupName)}")
                                 .ConfigureAwait(false);
                         else
                             await APIHelper.DiscordAPI.SendMessageAsync(reportChannel, $"{mention} {LM.Get("grantRolesMessage", characterData.name)}")
                                 .ConfigureAwait(false);
                     }
-                    await LogHelper.LogInfo($"Granting roles to {characterData.name} {(group.PreliminaryAuthMode ? $"[AUTO-AUTH from {groupName}]" : $"[MANUAL-AUTH {groupName}]")}", LogCat.AuthCheck);
 
                     //remove all prevoius users associated with discordID or charID
                     List<long> altCharIds = null;
@@ -1070,8 +985,10 @@ namespace ThunderED.Modules
                     }
 
                     // authUser.CharacterId = authUser.CharacterId;
-                    authUser.DiscordId = discordId;
-                    authUser.GroupName = groupName;
+                    authUser.DiscordId = discordId > 0 ? discordId : authUser.DiscordId;
+                    if (discordId == 0)
+                        await AuthWarningLog(authUser, "Assigning 0 Discord ID to auth user?");
+                    authUser.GroupName = result.GroupName;
                     authUser.SetStateAuthed();
                     authUser.RegCode = null;
 
@@ -1082,22 +999,26 @@ namespace ThunderED.Modules
                         altCharIds.ForEach(async a=> await SQLHelper.UpdateMainCharacter(a, authUser.CharacterId));
 
                     //run roles assignment
+                    await AuthInfoLog(authUser, $"Running roles update for {characterData.name} {(group.PreliminaryAuthMode ? $"[AUTO-AUTH from {result.GroupName}]" : $"[MANUAL-AUTH {result.GroupName}]")}");
+
                     await UpdateUserRoles(discordId, SettingsManager.Settings.WebAuthModule.ExemptDiscordRoles,
-                        SettingsManager.Settings.WebAuthModule.AuthCheckIgnoreRoles, isManualAuth);
+                        SettingsManager.Settings.WebAuthModule.AuthCheckIgnoreRoles);
 
                     //notify about success
                     if(channel != 0)
                         await APIHelper.DiscordAPI.SendMessageAsync(channel, LM.Get("msgAuthSuccess", APIHelper.DiscordAPI.GetUserMention(discordId), characterData.name));
+                    await AuthInfoLog(authUser, $"Character {characterData.name} has been successfully authenticated");
                 }
                 else
                 {
-                    await APIHelper.DiscordAPI.SendMessageAsync(context.Channel, "Unable to accept user as he don't fit into auth group access criteria!").ConfigureAwait(false);
-                    await LogHelper.LogError("ESI Failure or No Access", LogCat.AuthWeb);
+                    if(context != null)
+                        await APIHelper.DiscordAPI.SendMessageAsync(context.Channel, "Unable to accept user as he don't fit into auth group access criteria!").ConfigureAwait(false);
+                    await LogHelper.LogError($"ESI Failure or No Access - auth group name not matching user data! DiscordID: {discordId}", LogCat.AuthWeb);
                 }
             }
             catch (Exception ex)
             {
-                await LogHelper.LogEx($"Failed adding Roles to User {characterData?.name}, Reason: {ex.Message}", ex, LogCat.AuthCheck);
+                await LogHelper.LogEx($"Failed to auth character {characterData?.name}, Reason: {ex.Message}", ex, LogCat.AuthCheck);
             }
         }
 

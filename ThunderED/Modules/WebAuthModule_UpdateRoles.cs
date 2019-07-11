@@ -21,6 +21,7 @@ namespace ThunderED.Modules
             public WebAuthGroup Group;
             public List<SocketRole> UpdatedRoles = new List<SocketRole>();
             public List<string> ValidManualAssignmentRoles = new List<string>();
+            public bool IsConnectionError { get; set; }
         }
 
         internal static async Task UpdateAllUserRoles(List<string> exemptRoles, List<string> authCheckIgnoreRoles)
@@ -37,7 +38,7 @@ namespace ThunderED.Modules
 
             await dids.ParallelForEachAsync(async id =>
             {
-                await UpdateUserRoles(id, exemptRoles, authCheckIgnoreRoles, false); 
+                await UpdateUserRoles(id, exemptRoles, authCheckIgnoreRoles); 
             }, 8);
 
             await UpdateDBUserRoles(exemptRoles, authCheckIgnoreRoles, dids);
@@ -49,11 +50,11 @@ namespace ThunderED.Modules
            // var x = ids.FirstOrDefault(a => a == 268473315843112960);
             await ids.Where(a => !dids.Contains(a)).ParallelForEachAsync(async id =>
             {
-                await UpdateUserRoles(id, exemptRoles, authCheckIgnoreRoles, false); 
+                await UpdateUserRoles(id, exemptRoles, authCheckIgnoreRoles); 
             }, 8);
         }
 
-        public static async Task<string> UpdateUserRoles(ulong discordUserId, List<string> exemptRoles, List<string> authCheckIgnoreRoles, bool isManualAuth,
+        public static async Task<string> UpdateUserRoles(ulong discordUserId, List<string> exemptRoles, List<string> authCheckIgnoreRoles,
             bool forceRemove = false)
         {
             try
@@ -62,20 +63,28 @@ namespace ThunderED.Modules
                 var u = discordGuild.GetUser(discordUserId);
 
                 if (u != null && (u.Id == APIHelper.DiscordAPI.Client.CurrentUser.Id || u.IsBot || u.Roles.Any(r => exemptRoles.Contains(r.Name))))
+                {
+                    await AuthInfoLog(discordUserId, "[RUPD] User is bot or have an exempt role. Skipping roles update", true);
                     return null;
-                if(u == null && (discordUserId == APIHelper.DiscordAPI.Client.CurrentUser.Id))
-                    return null;
+                }
 
-                // await LogHelper.LogInfo($"Running Auth Check on {u.Username}", LogCat.AuthCheck, false);
+                if (u == null && (discordUserId == APIHelper.DiscordAPI.Client.CurrentUser.Id))
+                {
+                    await AuthInfoLog(discordUserId, "[RUPD] Discord user not found. Skipping roles update.", true);
+                    return null;
+                }
 
                 var authUser = await SQLHelper.GetAuthUserByDiscordId(discordUserId);
-
                 if (authUser != null)
                 {
                     //get data
                     var characterData = await APIHelper.ESIAPI.GetCharacterData("authCheck", authUser.CharacterId, true);
                     //skip bad requests
-                    if(characterData == null) return null;
+                    if (characterData == null)
+                    {
+                        await AuthInfoLog(authUser, "[RUPD] Character data is null. Skipping due to bad request.", true);
+                        return null;
+                    }
 
                     if (authUser.Data.CorporationId != characterData.corporation_id || authUser.Data.AllianceId != (characterData.alliance_id ?? 0))
                     {
@@ -84,33 +93,40 @@ namespace ThunderED.Modules
                     }
                     var remroles = new List<SocketRole>();
 
-                    var result = authUser.IsDumped ? new RoleSearchResult() : await GetRoleGroup(authUser.CharacterId, discordUserId, isManualAuth, authUser.RefreshToken);
+                    var result = authUser.IsDumped ? new RoleSearchResult() : await GetRoleGroup(authUser.CharacterId, discordUserId, authUser.RefreshToken);
+                    if (result.IsConnectionError)
+                    {
+                        await AuthWarningLog(characterData, "[RUPD] Connection error while searching for group! Skipping roles update.");
+                        return null;
+                    }
+                    await AuthInfoLog(characterData, $"[RUPD] GRPFETCH GROUP: {result.GroupName} ROLES: {(result.UpdatedRoles == null || !result.UpdatedRoles.Any() ? "null" : string.Join(',', result.UpdatedRoles.Where(a=> !a.Name.StartsWith("@")).Select(a=> a.Name)))} MANUAL: {(result.ValidManualAssignmentRoles == null || !result.ValidManualAssignmentRoles.Any() ? "null" : string.Join(',', result.ValidManualAssignmentRoles))}", true);
+
                     var isMovingToDump = string.IsNullOrEmpty(result.GroupName) && authUser.IsAuthed;
                     var isAuthed = !string.IsNullOrEmpty(result.GroupName);
+                    await AuthInfoLog(characterData, $"[RUPD] TODUMP: {isMovingToDump}  ISAUTHED: {isAuthed} FORCED: {forceRemove}", true);
+
                     var changed = false;
-                    //skip dumped
-                    //if (authUser.IsSpying) return null;
                     if (!isMovingToDump)
                     {
-                       // var group = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Key == result.GroupName);
-                        //switch group
-                        if (!string.IsNullOrEmpty(result.GroupName) && result.GroupName != authUser.GroupName)
+                        if (!string.IsNullOrEmpty(result.GroupName) && !string.IsNullOrEmpty(authUser.GroupName) && result.GroupName != authUser.GroupName)
                         {
-                            await LogHelper.LogInfo($"User {authUser.Data.CharacterName}({authUser.CharacterId}) has been transferred from {authUser.GroupName} to {result.GroupName} group", LogCat.AuthCheck);
-                            authUser.GroupName = result.GroupName;
-                            await SQLHelper.SaveAuthUser(authUser);
+                            var oldGroup = GetGroupByName(authUser.GroupName).Value;
+                            if (oldGroup != null && (oldGroup.UpgradeGroupNames.ContainsCaseInsensitive(result.GroupName) || oldGroup.DowngradeGroupNames.ContainsCaseInsensitive(result.GroupName)))
+                            {
+                                await AuthInfoLog(characterData,
+                                    $"[RUPD] Character has been transferred from {authUser.GroupName} to {result.GroupName} group");
+                                authUser.GroupName = result.GroupName;
+                                await SQLHelper.SaveAuthUser(authUser);
+                            }
                         }
-                       // isMovingToDump = group.Value == null || (group.Value.IsEmpty() && authUser.GroupName != group.Key);
                     }
-
-                    // var isAuthed = result.UpdatedRoles.Count > 1;
 
                     //move to dumpster
                     if (forceRemove || isMovingToDump && !authUser.IsDumped)
                     {
                         if (SettingsManager.Settings.Config.ModuleHRM && SettingsManager.Settings.HRMModule.UseDumpForMembers)
                         {
-                            await LogHelper.LogInfo($"{authUser.Data.CharacterName}({authUser.CharacterId}) is being moved into dumpster...", LogCat.AuthCheck);
+                            await AuthInfoLog(characterData, $"[RUPD] Character is being moved into dumpster...");
                             authUser.SetStateDumpster();
                             if(!forceRemove)
                                 authUser.GroupName = null;
@@ -119,11 +135,12 @@ namespace ThunderED.Modules
                         }
                         else
                         {
-                            await LogHelper.LogInfo($"{authUser.Data.CharacterName}({authUser.CharacterId}) is no longer validated for `{authUser.GroupName}` group and will be deleted!", LogCat.AuthCheck);
+                            await AuthInfoLog(characterData, $"[RUPD] {authUser.Data.CharacterName}({authUser.CharacterId}) is no longer validated for `{authUser.GroupName}` group and will be deleted!");
                             await SQLHelper.DeleteAuthDataByCharId(authUser.CharacterId);
                         }
                     }
                     //skip if we don't have discord user (discord-less auth)
+                    await AuthInfoLog(characterData, $"[RUPD] Skipping roles check as discord user is null", true);
                     if (u == null) return null;
 
                     var initialUserRoles = new List<SocketRole>(u.Roles);
@@ -158,7 +175,7 @@ namespace ThunderED.Modules
                             }
                             catch
                             {
-                                await LogHelper.LogWarning($"Failed to add {string.Join(", ", result.UpdatedRoles.Select(a=> a.Name))} roles to {characterData.name} ({u.Username})!", LogCat.AuthCheck);
+                                await AuthWarningLog(characterData, $"[RUPD] Failed to add {string.Join(", ", result.UpdatedRoles.Select(a=> a.Name))} roles to {characterData.name} ({u.Username})!");
                             }
                         }
 
@@ -171,7 +188,7 @@ namespace ThunderED.Modules
                             }
                             catch
                             {
-                                await LogHelper.LogWarning($"Failed to remove {string.Join(", ", remroles.Select(a=> a.Name))} roles from {characterData.name} ({u.Username})!", LogCat.AuthCheck);
+                                await AuthWarningLog(characterData, $"[RUPD] Failed to remove {string.Join(", ", remroles.Select(a=> a.Name))} roles from {characterData.name} ({u.Username})!");
                             }
                         }
 
@@ -187,7 +204,7 @@ namespace ThunderED.Modules
                                 else await APIHelper.DiscordAPI.SendMessageAsync(channel, $"{LM.Get("renewingRoles")} {characterData.name} ({u.Username}){stripped}{added}");
                             }
 
-                            await LogHelper.LogInfo($"Adjusting roles for {characterData.name} ({u.Username}) {stripped}{added}", LogCat.AuthCheck);
+                            await AuthInfoLog(characterData, $"[RUPD] Adjusting roles for {characterData.name} ({u.Username}) {stripped}{added}");
                         }
                     }
 
@@ -215,20 +232,24 @@ namespace ThunderED.Modules
 
                         if (nickname != u.Nickname && !string.IsNullOrWhiteSpace(u.Nickname) || string.IsNullOrWhiteSpace(u.Nickname) && u.Username != nickname)
                         {
-                            await LogHelper.LogInfo($"Trying to change name of {u.Nickname} to {nickname}", LogCat.AuthCheck);
+                            await AuthInfoLog(characterData, $"[RUPD] Trying to change name of {u.Nickname} to {nickname}");
                             try
                             {
                                 await u.ModifyAsync(x => x.Nickname = nickname);
                             }
                             catch
                             {
-                                await LogHelper.LogError($"Name change failed, probably due to insufficient rights", LogCat.AuthCheck);
+                                await LogHelper.LogError($"[RUPD] Name change failed, probably due to insufficient rights", LogCat.AuthCheck);
                             }
                         }
                     }
 
                     return isAuthed ? result.GroupName : null;
                 }
+
+
+                await AuthInfoLog(discordUserId, "[RUPD] Auth user not found. Checking live discord user", true);
+
 
                 //auth user not found
                 if (u == null) return null;
@@ -264,9 +285,12 @@ namespace ThunderED.Modules
                         var channel = discordGuild.GetTextChannel(SettingsManager.Settings.WebAuthModule.AuthReportChannel);
                         if(channel != null)
                             await APIHelper.DiscordAPI.SendMessageAsync(channel, $"{LM.Get("resettingRoles")} {u.Username}");
-                        await LogHelper.LogInfo($"Resetting roles for {u.Username}", LogCat.AuthCheck);
                         var trueRroles = rroles.Where(a => !exemptRoles.Contains(a.Name) && !authCheckIgnoreRoles.Contains(a.Name));
-                        await u.RemoveRolesAsync(trueRroles);
+                        if (trueRroles.Any())
+                        {
+                            await AuthInfoLog(discordUserId, $"[RUPD] Resetting roles for {u.Username}: {string.Join(',', trueRroles.Select(a=> a.Name))}");
+                            await u.RemoveRolesAsync(trueRroles);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -284,7 +308,7 @@ namespace ThunderED.Modules
             }
         }
 
-        private static async Task UpdateResultRolesWithTitles(SocketGuild discordGuild, List<AuthRoleEntity> roleEntities, RoleSearchResult result, long charID, string uToken)
+        private static async Task UpdateResultRolesWithTitles(SocketGuild discordGuild, List<AuthRoleEntity> roleEntities, RoleSearchResult result, JsonClasses.CharacterData ch, string uToken)
         {
             //process titles in priority
             //TODO titles and general mix?
@@ -294,12 +318,12 @@ namespace ThunderED.Modules
             {
                 if (string.IsNullOrEmpty(uToken))
                 {
-                    await LogHelper.LogWarning(
-                        $"User ID {charID} has no ESI token but is being checked against group with Titles! Titles require esi-characters.read_titles.v1 permissions!");
+                    await AuthWarningLog(ch,
+                        $"User has no ESI token but is being checked against group with Titles! Titles require `esi-characters.read_titles.v1` permissions!");
                     return;
                 }
 
-                var userTitles = (await APIHelper.ESIAPI.GetCharacterTitles("AuthCheck", charID, uToken))?.Select(a=> a.name).ToList();
+                var userTitles = (await APIHelper.ESIAPI.GetCharacterTitles("AuthCheck", ch.character_id, uToken))?.Select(a=> a.name).ToList();
                 if (userTitles != null && userTitles.Any())
                 {
 
@@ -341,7 +365,13 @@ namespace ThunderED.Modules
             }
         }
 
-        public static async Task<RoleSearchResult> GetRoleGroup(long characterID, ulong discordUserId, bool isManualAuth = false, string refreshToken = null)
+        private static KeyValuePair<string, WebAuthGroup> GetGroupByName(string name)
+        {
+            var trimmedName = name.Trim();
+            return SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Key.Trim().Equals(trimmedName,StringComparison.OrdinalIgnoreCase));
+        }
+
+        public static async Task<RoleSearchResult> GetRoleGroup(long characterID, ulong discordUserId, string refreshToken = null)
         {
             var result = new RoleSearchResult();
             var discordGuild = APIHelper.DiscordAPI.GetGuild();
@@ -351,7 +381,10 @@ namespace ThunderED.Modules
             try
             {
                 if (characterData == null)
+                {
+                    await AuthWarningLog(discordUserId, "[RG] Aborted due to character data is null");
                     return result;
+                }
 
                 if (u != null)
                     result.UpdatedRoles.Add(u.Roles.FirstOrDefault(x => x.Name == "@everyone"));
@@ -363,162 +396,99 @@ namespace ThunderED.Modules
                 #region Select groups to check
                 if (!string.IsNullOrEmpty(authData?.GroupName))
                 {
+                    await AuthInfoLog(characterData, $"[RG] Has group name {authData.GroupName}", true);
+
                     //check specified group for roles
-                    var group = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Key == authData.GroupName);
-                    if (group.Value != null)
+                    var (groupName, group) = GetGroupByName(authData.GroupName);
+                    if (group != null)
                     {
                         //process upgrade groups first
-                        if (group.Value.UpgradeGroupNames.Any())
+                        if (group.UpgradeGroupNames.Any())
                         {
-                            foreach (var item in group.Value.UpgradeGroupNames)
+                            await AuthInfoLog(characterData, $"[RG] Adding upgrade groups: {string.Join(',', group.UpgradeGroupNames)}", true);
+
+                            foreach (var item in group.UpgradeGroupNames)
                             {
-                                var (key, value) = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Key == item);
+                                var (key, value) = GetGroupByName(item);
                                 if (value != null)
                                     groupsToCheck.Add(key, value);
                             }
                         }
 
                         //add root group
-                        groupsToCheck.Add(group.Key, group.Value);
+                        groupsToCheck.Add(groupName, group);
 
                         //add downgrade groups (checked last)
-                        if (authData.IsAuthed && group.Value.DowngradeGroupNames.Any())
+                        if (authData.IsAuthed && group.DowngradeGroupNames.Any())
                         {
-                            foreach (var item in group.Value.DowngradeGroupNames)
+                            await AuthInfoLog(characterData, $"[RG] Adding downgrade groups: {string.Join(',', group.DowngradeGroupNames)}", true);
+                            foreach (var item in group.DowngradeGroupNames)
                             {
-                                var (key, value) = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Key == item);
+                                var (key, value) = GetGroupByName(item);
                                 if (value != null)
                                     groupsToCheck.Add(key, value);
                             }
                         }
-                    }
+                    }else
+                        await AuthWarningLog(characterData, "[RG] Specified group not found!", true);
+
+
                 }
                 else //no auth group specifies - fresh general auth
                 {
                     //check only GENERAL auth groups for roles
                     //non-general group auth should have group name supplied
-                    foreach (var (key, value) in SettingsManager.Settings.WebAuthModule.AuthGroups.Where(a => !a.Value.ESICustomAuthRoles.Any()))
+                    foreach (var (key, value) in SettingsManager.Settings.WebAuthModule.AuthGroups.Where(a => !a.Value.ESICustomAuthRoles.Any() && !a.Value.BindToMainCharacter))
                     {
                         groupsToCheck.Add(key, value);
                     }
+                    await AuthInfoLog(characterData, $"[RG] No group were specified, selected for search: {string.Join(',', groupsToCheck.Keys)}!", true);
                 }
                 #endregion
 
                // string groupName = null;
 
                 //refresh token
-                var uToken = string.IsNullOrEmpty(refreshToken) ? null : await APIHelper.ESIAPI.RefreshToken(refreshToken, SettingsManager.Settings.WebServerModule.CcpAppClientId,
+                var tq = string.IsNullOrEmpty(refreshToken) ? null : await APIHelper.ESIAPI.RefreshToken(refreshToken, SettingsManager.Settings.WebServerModule.CcpAppClientId,
                     SettingsManager.Settings.WebServerModule.CcpAppSecret);
 
+                var uToken = tq?.Result;
+                if (tq != null)
+                {
+                    if (tq.Data.IsFailed)
+                    {
+                        if (!tq.Data.IsNotValid)
+                        {
+                            result.IsConnectionError = true;
+                            await AuthWarningLog(characterData, $"[RG] {characterData.name} Connection error while fetching token!");
+                        }
+
+                        return result;
+                    }
+                }
+                
+
+                await AuthInfoLog(characterData, $"[RG] PRE TOCHECK: {string.Join(',', groupsToCheck.Keys)} CHARID: {characterID} DID: {authData.DiscordId} AUTH: {authData.AuthState} GRP{authData.GroupName}", true);
                 var foundGroup = await GetAuthGroupByCharacter(groupsToCheck, characterID);
                 if (foundGroup != null)
                 {
-                    await UpdateResultRolesWithTitles(discordGuild, foundGroup.RoleEntities, result, characterID, uToken);
+                    await AuthInfoLog(characterData, $"[RG] Group found: {foundGroup.GroupName} Roles: {string.Join(',', foundGroup.RoleEntities.SelectMany(a=> a.DiscordRoles))} Titles: {string.Join(',', foundGroup.RoleEntities.SelectMany(a=> a.Titles))}!", true);
+
+                    //bad token
+                    if (foundGroup.Group.RemoveAuthIfTokenIsInvalid && tq != null && tq.Data.IsNotValid)
+                    {
+                        await AuthWarningLog(characterData, $"[RG] User {characterData.name} token is no more valid. Authentication will be declined.");
+                        return result;
+                    }
+
+
+                    await UpdateResultRolesWithTitles(discordGuild, foundGroup.RoleEntities, result, characterData, uToken);
                     result.ValidManualAssignmentRoles.AddRange(foundGroup.Group.ManualAssignmentRoles.Where(a => !result.ValidManualAssignmentRoles.Contains(a)));
                     result.GroupName = foundGroup.GroupName;
                     result.Group = foundGroup.Group;
-                    groupsToCheck.Clear();
-                    groupsToCheck.Add(foundGroup.GroupName, foundGroup.Group);
-                }
+                }else 
+                    await AuthInfoLog(characterData, $"[RG] Group not found", true);
 
-                // var hasAuth = foundGroup != null;
-
-                // Check for Character Roles
-                /*var authResultCharacter = await GetAuthGroupByCharacterId(groupsToCheck, characterID);
-                if (authResultCharacter != null)
-                {
-                    await UpdateResultRolesWithTitles(discordGuild, authResultCharacter.RoleEntity, result, characterID, uToken);
-                    result.ValidManualAssignmentRoles.AddRange(authResultCharacter.Group.ManualAssignmentRoles.Where(a => !result.ValidManualAssignmentRoles.Contains(a)));
-                    groupName = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Value == authResultCharacter.Group).Key;
-                    hasAuth = true;
-                    groupsToCheck.Clear();
-                    groupsToCheck.Add(groupName, authResultCharacter.Group);
-                }
-
-                if (authResultCharacter == null || (authResultCharacter.Group != null && !authResultCharacter.Group.UseStrictAuthenticationMode))
-                {
-                    // Check for Corporation Roles
-                    var authResultCorporation = await GetAuthGroupByCorpId(groupsToCheck, characterData.corporation_id);
-                    if (authResultCorporation != null)
-                    {
-                        await UpdateResultRolesWithTitles(discordGuild, authResultCorporation.RoleEntity, result, characterID, uToken);
-                        result.ValidManualAssignmentRoles.AddRange(authResultCorporation.Group.ManualAssignmentRoles.Where(a => !result.ValidManualAssignmentRoles.Contains(a)));
-                        groupName = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Value == authResultCorporation.Group).Key;
-                        hasAuth = true;
-                        groupsToCheck.Clear();
-                        groupsToCheck.Add(groupName, authResultCorporation.Group);
-                    }
-
-                    var group = authResultCharacter?.Group ?? authResultCorporation?.Group;
-
-                    if (group == null || !group.UseStrictAuthenticationMode)
-                    {
-                        // Check for Alliance Roles
-                        var authResultAlliance = await GetAuthGroupByAllyId(groupsToCheck, characterData.alliance_id ?? 0);
-                        if (authResultAlliance != null)
-                        {
-                            await UpdateResultRolesWithTitles(discordGuild, authResultAlliance.RoleEntity, result, characterID, uToken);
-                            result.ValidManualAssignmentRoles.AddRange(authResultAlliance.Group.ManualAssignmentRoles.Where(a => !result.ValidManualAssignmentRoles.Contains(a)));
-                            groupName = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Value == authResultAlliance.Group).Key;
-                            hasAuth = true;
-                        }
-                    }
-                }*/
-
-              /*  if (!hasAuth)
-                {
-                    result.UpdatedRoles = result.UpdatedRoles.Distinct().ToList();
-                    result.ValidManualAssignmentRoles = result.ValidManualAssignmentRoles.Distinct().ToList();
-                    //search for personal stands
-                    var grList = groupsToCheck.Where(a => a.Value.StandingsAuth != null).ToList();
-                    if (grList.Count > 0)
-                    {
-                        var ar = await GetAuthGroupByCharacterId(groupsToCheck, characterID);
-                        if (ar != null)
-                        {
-                            var aRoles = discordGuild.Roles.Where(a => ar.RoleEntity.DiscordRoles.Contains(a.Name)).ToList();
-                            if (aRoles.Count > 0)
-                                result.UpdatedRoles.AddRange(aRoles);
-                            result.ValidManualAssignmentRoles.AddRange(ar.Group.ManualAssignmentRoles);
-                            groupName = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a => a.Value == ar.Group).Key;
-
-                        }
-                    }
-                }*/
-
-               /* if (!hasAuth && (isManualAuth || !string.IsNullOrEmpty(authData?.GroupName)))
-                {
-                    var token = await SQLHelper.GetAuthUserByCharacterId(characterID);
-                    if (token != null && !string.IsNullOrEmpty(token.GroupName) && SettingsManager.Settings.WebAuthModule.AuthGroups.ContainsKey(token.GroupName))
-                    {
-                        var group = SettingsManager.Settings.WebAuthModule.AuthGroups[token.GroupName];
-                        if ((!group.AllowedMembers.Any() || group.AllowedMembers.Values.All(a => a.Entities.All(b => b.ToString().All(char.IsDigit) && (long)b == 0)))
-                            && group.StandingsAuth == null)
-                        {
-                            groupName = token.GroupName;
-                            var l = group.AllowedMembers.SelectMany(a => a.Value.DiscordRoles);
-                            var aRoles = discordGuild.Roles.Where(a => l.Contains(a.Name)).ToList();
-                            result.UpdatedRoles.AddRange(aRoles);
-                        }
-                    }
-
-                    //ordinary guest
-                    if (string.IsNullOrEmpty(groupName))
-                    {
-                        var grp = SettingsManager.Settings.WebAuthModule.AuthGroups.FirstOrDefault(a =>
-                            a.Value.AllowedMembers.Values.All(b => b.Entities.All(c => c.ToString().All(char.IsDigit) && (long)c == 0)));
-                        if (grp.Value != null)
-                        {
-                            groupName = grp.Key;
-                            var l = grp.Value.AllowedMembers.SelectMany(a => a.Value.DiscordRoles);
-                            var aRoles = discordGuild.Roles.Where(a => l.Contains(a.Name)).ToList();
-                            result.UpdatedRoles.AddRange(aRoles);
-                        }
-                    }
-                }*/
-
-              //  result.UpdatedRoles = result.UpdatedRoles.Distinct().ToList();
-               // result.GroupName = groupName;
                 return result;
             }
             catch(Exception ex)
