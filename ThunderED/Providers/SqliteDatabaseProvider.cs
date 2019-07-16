@@ -291,6 +291,24 @@ namespace ThunderED.Providers
 
         }
 
+        public async Task Update(string table, string setField, object setData)
+        {
+            var query = $"UPDATE {table} SET {setField} = @data";
+            await SessionWrapper(query, async command =>
+            {
+                command.Parameters.Add(CreateParam<SqliteParameter>("@data", setData ?? DBNull.Value));
+                try
+                {
+                    command.ExecuteNonQuery();
+                }
+                catch (Exception ex)
+                {
+                    await LogHelper.LogEx($"[{nameof(Update)}]: {query}", ex, LogCat.Database);
+                }
+            });
+        }
+
+
         public async Task Update(string table, string setField, object setData, Dictionary<string, object> where)
         {
             if (where == null)
@@ -501,6 +519,54 @@ namespace ThunderED.Providers
 
             await Task.Delay(1);
             return true;
+        }
+
+        public async Task<List<object[]>> SelectDataWithDateCondi(string table, string[] fields, string whereField, int minutes, int limit)
+        {
+            var field = string.Join(',', fields);
+            var query = $"SELECT {field} FROM {table} WHERE authState=2 and main_character_id is null and (`{whereField}` is null or `{whereField}` <= datetime('now','-{minutes} minutes')) LIMIT {limit}";
+
+            return await SessionWrapper(query, async command =>
+            {
+                try
+                {
+                    using (var r = await command.ExecuteReaderAsync())
+                    {
+                        var list = new List<object[]>();
+                        if (r.HasRows)
+                        {
+                            while (await r.ReadAsync())
+                            {
+                                var obj = new List<object>();
+
+                                if (field == "*")
+                                {
+                                    for (int i = 0; i < r.VisibleFieldCount; i++)
+                                    {
+                                        obj.Add(r.IsDBNull(i) ? null : r.GetValue(i));
+                                    }
+                                }
+                                else
+                                {
+                                    for (int i = 0; i < fields.Length; i++)
+                                    {
+                                        obj.Add(r.IsDBNull(i) ? null : r.GetValue(i));
+                                    }
+                                }
+
+                                list.Add(obj.ToArray());
+                            }
+                        }
+                        return list;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await LogHelper.LogEx($"[SelectDataWithDateCondi]: {query} ", ex, LogCat.Database);
+                    return default;
+                }
+
+            });
         }
     }
 }

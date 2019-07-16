@@ -13,6 +13,7 @@ namespace ThunderED.Classes
     {
         Task<T> Query<T>(string table, string field, Dictionary<string, object> where);
         Task Update(string table, string setField, object setData, Dictionary<string, object> where);
+        Task Update(string table, string setField, object setData);
         Task<bool> Delete(string table, Dictionary<string, object> where = null);
         Task DeleteWhereIn(string table, string field, List<long> list, bool not);
         Task InsertOrUpdate(string table, Dictionary<string, object> values);
@@ -32,5 +33,6 @@ namespace ThunderED.Classes
         Task PurgeCache();
         
         Task CleanupNotificationsList();
+        Task<List<object[]>> SelectDataWithDateCondi(string table, string[] fields, string whereField, int minutes, int limit);
     }
 }

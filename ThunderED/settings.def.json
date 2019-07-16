@@ -49,6 +49,7 @@
     "UseSingleFileForLogging": false, 
     "logNewNotifications": true,
     "requestRetries": 3,
+    "ConcurrentThreadsCount": 4,
     "extendedESILogging": false,
     "ESIAddress": "https://esi.evetech.net/",
     "UseHTTPS": false,
@@ -147,7 +148,9 @@
     }
   },
   "WebAuthModule": {
-    "authCheckIntervalMinutes": 480,
+    "authCheckIntervalMinutes": 60,
+    "AuthTakeNumberOfUsersPerPass": 100,
+
     "StandingsRefreshIntervalInMinutes": 60,
     "exemptDiscordRoles": [ "Admins" ],
     "AuthCheckIgnoreRoles": [ "CustomDiscordRoleToSkipOnAuthCheck" ],
@@ -155,15 +158,17 @@
     "//": "Channels where !auth command is allowed. Empty - everywhere",
     "comAuthChannels": [],
     "DefaultAuthGroup": "Mode1",
-    "AutoClearAuthCommandsFromDiscord":  false, 
+    "AutoClearAuthCommandsFromDiscord": false,
     "enforceCorpTickers": true,
     "enforceAllianceTickers": true,
+    "EnforceSingleTickerPerUser": false,
     "enforceCharName": true,
     "UseOneAuthButton": false,
-    "EnableDetailedLogging": false, 
+    "EnableDetailedLogging": false,
     "authGroups": {
       "Mode1_GeneralAuth": {
         "RemoveAuthIfTokenIsInvalid": false,
+        "RemoveTokenIfTokenIsInvalid": false,
         "StopSearchingOnFirstMatch": "false",
         "AllowedMembers": {
           "entry1": {
@@ -290,7 +295,7 @@
         "DowngradeGroupNames": [],
         "AllowedMembers": {
           "entry1": {
-            "Entities": [ ],
+            "Entities": [],
             "DiscordRoles": [ "Guest" ]
           }
         },
