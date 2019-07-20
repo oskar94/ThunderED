@@ -200,8 +200,12 @@ namespace ThunderED.Classes
                         continue;
                     }
 
-                    var result = (await APIHelper.ESIAPI.SearchAllianceId("SimplAuth", entry.Name))?.alliance?[0] ?? 0;
-                    if (result > 0) //alliance
+                    var result = (await APIHelper.ESIAPI.SearchAllianceId("SimplAuth", entry.Name))?.alliance?[0] ??
+                        (await APIHelper.ESIAPI.SearchCorporationId("SimplAuth", entry.Name))?.corporation?[0] ??
+                        (await APIHelper.ESIAPI.SearchCharacterId("SimplAuth", entry.Name))?.character?[0] ??
+                        0;
+                    
+                    if (result > 0)
                     {
                         group.AllowedMembers.Add(entry.Name, new AuthRoleEntity
                         {
@@ -211,32 +215,8 @@ namespace ThunderED.Classes
                     }
                     else
                     {
-                        result = (await APIHelper.ESIAPI.SearchCorporationId("SimplAuth", entry.Name))?.corporation?[0] ?? 0;
-                        if (result > 0) //corp
-                        {
-                            group.AllowedMembers.Add(entry.Name, new AuthRoleEntity
-                            {
-                                Entities = new List<object> {result},
-                                DiscordRoles = entry.RolesList
-                            });
-                        }
-                        else
-                        {
-                            result = (await APIHelper.ESIAPI.SearchCharacterId("SimplAuth", entry.Name))?.character?[0] ?? 0;
-                            if (result > 0) //char
-                            {
-                                group.AllowedMembers.Add(entry.Name, new AuthRoleEntity
-                                {
-                                    Entities = new List<object> {result},
-                                    DiscordRoles = entry.RolesList
-                                });
-                            }
-                            else
-                            {
-                                await LogHelper.LogWarning($"Entity not found: {entry.Name}!", LogCat.SimplAuth);
-                                continue;
-                            }
-                        }
+                        await LogHelper.LogWarning($"Entity not found: {entry.Name}!", LogCat.SimplAuth);
+                        continue;
                     }
                 }
                 catch (Exception ex)
@@ -245,9 +225,6 @@ namespace ThunderED.Classes
                 }
             }
             await LogHelper.LogInfo("Simplified Auth processing complete!", LogCat.SimplAuth);
-
         }
-
-
     }
 }
