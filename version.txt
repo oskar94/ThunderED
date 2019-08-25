@@ -1,3 +1,17 @@
+### V1.4.4
++ Fixed config editor LiveKillFeedModule write
++ Improved contracts module performance
++ Updated basic contract messages content
+
+### V1.4.3
++ Added new auth module property `AuthCheckUnregisteredDiscordUsers` to be able to switch off unregisteres users checks
++ Fixed timers web page access malfunction
++ Fixed auth check entries selection based on time
++ Fixed kill feed to correctly use template file for radius kills
++ Fixed missing KMs
++ Fixed chat relay dependencies
++ Made unregistered Discord user checks linear to reduce Discord server load
+
 ### V1.4.2
 + Added new notifications, some with temp placeholder until I get real notification information
 ```
@@ -52,6 +66,7 @@ OwnershipTransferred
 + Colorized important log feeder posts (desktop Discord client only)
 
 ### BREAKING CHANGES
+- Automatic KM templates has been removed. Now you have to specify template file for each KM group manually or leave empty for default.
 - Added new entries to `Resources` config section
 - Replaced `SystemLogFeederSettings.OnlyErrors` with `SystemLogFeederSettings.LogSeverity`
 - Renamed web auth group `UseStrictAuthenticationMode` to `StopSearchingOnFirstMatch`

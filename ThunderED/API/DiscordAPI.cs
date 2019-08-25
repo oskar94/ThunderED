@@ -12,6 +12,7 @@ using ThunderED.Classes;
 using ThunderED.Classes.Entities;
 using ThunderED.Helpers;
 using ThunderED.Modules;
+using ThunderED.Modules.OnDemand;
 using ThunderED.Modules.Sub;
 using LogSeverity = ThunderED.Classes.LogSeverity;
 
@@ -109,7 +110,7 @@ namespace ThunderED.API
 
             try
             {
-                await channel.SendMessageAsync(message.FixedLength(MAX_MSG_LENGTH));
+                await channel.SendMessageAsync(message.TrimLengthOrSpace(MAX_MSG_LENGTH));
             }
             catch (HttpException ex)
             {
@@ -127,7 +128,7 @@ namespace ThunderED.API
             if (context?.Message == null) return;
             try
             {
-                await context.Message.Channel.SendMessageAsync(message.FixedLength(MAX_MSG_LENGTH), false, embed).ConfigureAwait(false);
+                await context.Message.Channel.SendMessageAsync(message.TrimLengthOrSpace(MAX_MSG_LENGTH), false, embed).ConfigureAwait(false);
             }
             catch (HttpException ex)
             {
@@ -144,7 +145,7 @@ namespace ThunderED.API
         {
             try
             {
-                if (channel == 0 || string.IsNullOrWhiteSpace(message)) return null;
+                if (channel == 0 || (string.IsNullOrWhiteSpace(message) && embed == null)) return null;
                 var ch = GetChannel(channel);
                 if (ch == null)
                 {
@@ -152,7 +153,7 @@ namespace ThunderED.API
                     return null;
                 }
 
-                return await SendMessageAsync(ch, message.FixedLength(MAX_MSG_LENGTH), embed);
+                return await SendMessageAsync(ch, message.TrimLengthOrSpace(MAX_MSG_LENGTH), embed);
             }
             catch (Exception ex)
             {
@@ -167,12 +168,13 @@ namespace ThunderED.API
         {
             try
             {
-                return await channel.SendMessageAsync(message.FixedLength(MAX_MSG_LENGTH), false, embed);
+                return await channel.SendMessageAsync(message.TrimLengthOrSpace(MAX_MSG_LENGTH), false, embed);
             }
             catch (HttpException ex)
             {
                 if (ex.DiscordCode == 50013)
                     await LogHelper.LogError($"The bot don't have rights to send message to {channel.Id} ({channel.Name}) channel!");
+                else await LogHelper.LogEx(nameof(ReplyMessageAsync), ex, LogCat.Discord);
                 return null;
             }
             catch (Exception ex)
@@ -393,82 +395,6 @@ namespace ThunderED.API
 
         #endregion
 
-        internal enum KillMailLinkTypes
-        {
-            character,
-            corporation,
-            alliance,
-            ship,
-            system
-        }
-
-        internal static string GetKillMailLink(long id, KillMailLinkTypes killMailLinkTypes)
-        {
-            return $"https://zkillboard.com/{killMailLinkTypes}/{id}/";
-        }
-
-        internal async Task SendEmbedKillMessage(List<ulong> channelIds, Color color, KillDataEntry km, string radiusMessage, string msg = "")
-        {
-            try
-            {
-                msg = msg ?? "";
-
-                var victimName = $"{LM.Get("killFeedName", $"[{km.rVictimCharacter?.name}]({GetKillMailLink(km.victimCharacterID, KillMailLinkTypes.character)})")}";
-                var victimCorp = $"{LM.Get("killFeedCorp", $"[{km.rVictimCorp?.name}]({GetKillMailLink(km.victimCorpID, KillMailLinkTypes.corporation)})")}";
-                var victimAlliance = km.rVictimAlliance == null
-                    ? ""
-                    : $"{LM.Get("killFeedAlliance", $"[{km.rVictimAlliance?.name}]")}({GetKillMailLink(km.victimAllianceID, KillMailLinkTypes.alliance)})";
-                var victimShip = $"{LM.Get("killFeedShip", $"[{km.rVictimShipType?.name}]({GetKillMailLink(km.victimShipID, KillMailLinkTypes.ship)})")}";
-
-
-                string[] victimStringArray = new string[] {victimName, victimCorp, victimAlliance, victimShip};
-
-                var attackerName = $"{LM.Get("killFeedName", $"[{km.rAttackerCharacter?.name}]({GetKillMailLink(km.finalBlowAttackerCharacterId, KillMailLinkTypes.character)})")}";
-                var attackerCorp = $"{LM.Get("killFeedCorp", $"[{km.rAttackerCorp?.name}]({GetKillMailLink(km.finalBlowAttackerCorpId, KillMailLinkTypes.corporation)})")}";
-                var attackerAlliance = km.rAttackerAlliance == null || km.finalBlowAttackerAllyId == 0
-                    ? null
-                    : $"{LM.Get("killFeedAlliance", $"[{km.rAttackerAlliance?.name}]({GetKillMailLink(km.finalBlowAttackerAllyId, KillMailLinkTypes.alliance)})")}";
-                var attackerShip = $"{LM.Get("killFeedShip", $"[{km.rAttackerShipType?.name}]({GetKillMailLink(km.attackerShipID, KillMailLinkTypes.ship)})")}";
-
-                string[] attackerStringArray = new string[] {attackerName, attackerCorp, attackerAlliance, attackerShip};
-
-
-                var killFeedDetails = LM.Get("killFeedDetails", km.killTime, km.value.ToString("#,##0 ISk"));
-                var killFeedDetailsSystem = LM.Get("killFeedDetailsSystem", $"[{km.sysName}]({GetKillMailLink(km.systemId, KillMailLinkTypes.system)})");
-
-                string[] detailsStringArray = new string[] {killFeedDetails, killFeedDetailsSystem};
-
-
-                var builder = new EmbedBuilder()
-                    .WithColor(color)
-                    .WithThumbnailUrl($"https://image.eveonline.com/Type/{km.victimShipID}_64.png")
-                    .WithAuthor(author =>
-                    {
-                        author.WithName(LM.Get("killFeedHeader", km.rVictimShipType?.name, km.rSystem?.name))
-                            .WithUrl($"https://zkillboard.com/kill/{km.killmailID}/");
-                        if (km.isNPCKill) author.WithIconUrl("http://www.panthernet.org/uf/npc2.jpg");
-                    })
-                    .AddField(LM.Get("Victim"), string.Join("\n", victimStringArray.Where(c => !string.IsNullOrWhiteSpace(c))))
-                    .AddField(LM.Get("Finalblow"), string.Join("\n", attackerStringArray.Where(c => !string.IsNullOrWhiteSpace(c))))
-                    .AddField(LM.Get("Details"), string.Join("\n", detailsStringArray.Where(c => !string.IsNullOrWhiteSpace(c))));
-
-                if (!string.IsNullOrEmpty(radiusMessage))
-                    builder.AddField(LM.Get("radiusInfoHeader"), radiusMessage);
-
-                var embed = builder.Build();
-                foreach (var id in channelIds)
-                {
-                    var channel = GetGuild()?.GetTextChannel(id);
-                    if (channel != null)
-                        await SendMessageAsync(channel, msg, embed).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                await LogHelper.LogEx(nameof(SendEmbedKillMessage), ex, LogCat.Discord);
-            }
-        }
-
         public IMessageChannel GetChannel(ulong guildID, ulong noid)
         {
             try
@@ -490,7 +416,7 @@ namespace ThunderED.API
             }
             catch (Exception ex)
             {
-                LogHelper.LogEx(nameof(SendEmbedKillMessage), ex, LogCat.Discord).GetAwaiter().GetResult();
+                LogHelper.LogEx(nameof(GetChannel), ex, LogCat.Discord).GetAwaiter().GetResult();
                 return null;
             }
         }
@@ -674,5 +600,6 @@ namespace ThunderED.API
         {
             return GetGuild()?.Users.Count ?? 0;
         }
+
     }
 }

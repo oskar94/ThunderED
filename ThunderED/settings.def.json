@@ -134,6 +134,7 @@
         "Filters": {
           "filter1": {
             "Inclusive": true,
+			"AllMustMatch": false,
             "MinimumKillValue": 10000000,
             "MinimumLossValue": 20000000,
             "ShipEntities": [ "Ibis", 2537 ],
@@ -154,6 +155,7 @@
     "StandingsRefreshIntervalInMinutes": 60,
     "exemptDiscordRoles": [ "Admins" ],
     "AuthCheckIgnoreRoles": [ "CustomDiscordRoleToSkipOnAuthCheck" ],
+    "AuthCheckUnregisteredDiscordUsers": true,
     "authReportChannel": 0,
     "//": "Channels where !auth command is allowed. Empty - everywhere",
     "comAuthChannels": [],
@@ -427,7 +429,7 @@
   "mailModule": {
     "checkIntervalInMinutes": 2,
     "AuthGroups": {
-      "VesNa": {
+      "Group1": {
         "Id": [ 0 ],
         "IncludePrivateMail": true,
         "DefaultChannel": 0,

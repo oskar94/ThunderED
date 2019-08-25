@@ -44,6 +44,11 @@ namespace ThunderED.Modules
             WebServerModule.ModuleConnectors.Add(Reason, Auth);
         }
 
+        public async override Task Initialize()
+        {
+            
+        }
+
         private DateTime _lastCleanupCheck = DateTime.FromFileTime(0);
 
 
@@ -75,8 +80,8 @@ namespace ThunderED.Modules
 
         private readonly ConcurrentDictionary<long, string> _tags = new ConcurrentDictionary<long, string>();
 
-        private readonly ConcurrentDictionary<long, List<JsonClasses.Notification>> _passContracts = new ConcurrentDictionary<long, List<JsonClasses.Notification>>();
-
+        private readonly ConcurrentDictionary<long, List<JsonClasses.Notification>> _passNotifications = new ConcurrentDictionary<long, List<JsonClasses.Notification>>();
+        private long _lastLoggerNotificationId;
 
         #region Notifications
         private async Task NotificationFeed()
@@ -130,25 +135,26 @@ namespace ThunderED.Modules
                                 if (tq.Data.IsNotValid)
                                     await SendOneTimeWarning(charId, $"Notifications token for character {charId} is outdated or no more valid!");
                                 else
-                                    await LogHelper.LogWarning($"Unable to get notifications token for character {charId}. Current check cycle will be skipped. {tq.Data.ErrorCode}({tq.Data.Message})");
-
+                                    await LogHelper.LogWarning(
+                                        $"Unable to get notifications token for character {charId}. Current check cycle will be skipped. {tq.Data.ErrorCode}({tq.Data.Message})");
                                 continue;
                             }
                             await LogHelper.LogInfo($"Checking characterID:{charId}", Category, LogToConsole, false);
 
                             var etag = _tags.GetOrNull(charId);
                             var result = await APIHelper.ESIAPI.GetNotifications(Reason, charId, token, etag);
+                            if(result == null) continue;
                             _tags.AddOrUpdateEx(charId, result.Data.ETag);
                             //abort if no connection
                             if(result.Data.IsNoConnection)
                                 return;
                             if (result.Data.IsNotModified || result.Result == null)
                             {
-                                if (!_passContracts.ContainsKey(charId))
+                                if (!_passNotifications.ContainsKey(charId))
                                     continue;
-                                result.Result = _passContracts[charId];
+                                result.Result = _passNotifications[charId];
                             }
-                            else _passContracts.AddOrUpdate(charId, result.Result);
+                            else _passNotifications.AddOrUpdate(charId, result.Result);
 
                             var notifications = result.Result;
 
@@ -769,7 +775,9 @@ namespace ThunderED.Modules
                                                             image = Settings.Resources.ImgCorpTaxChangeMsg;
                                                             break;
                                                         case "OwnershipTransferred":
-                                                            text = LM.Get("notifOwnershipTransferred", GetData("structureName", data), GetData("fromCorporationName", data), GetData("toCorporationName", data));
+                                                            var oldOwner = await APIHelper.ESIAPI.GetCorporationData(Reason, GetData("oldOwnerCorpID", data));
+                                                            var newOwner = await APIHelper.ESIAPI.GetCorporationData(Reason, GetData("newOwnerCorpID", data));
+                                                            text = LM.Get("notifOwnershipTransferred", GetData("structureName", data), oldOwner?.name, newOwner?.name);
                                                             image = Settings.Resources.ImgCitFuelAlert;
                                                             break;
                                                         default:
@@ -802,11 +810,22 @@ namespace ThunderED.Modules
                                                     var color = new Color(0x00FF00);
                                                     string text;
                                                     string image;
+
+                                                    var declaredById = GetData("declaredByID", data);
+                                                    var declareByName = !string.IsNullOrEmpty(declaredById)
+                                                        ? ((await APIHelper.ESIAPI.GetAllianceData(Reason, declaredById, true))?.name ?? (await APIHelper.ESIAPI.GetCorporationData(Reason, declaredById, true))?.name)
+                                                        : null;
+                                                    var declaredAgainstId = GetData("againstID", data);
+                                                    var declareAgainstName = !string.IsNullOrEmpty(declaredAgainstId)
+                                                        ? ((await APIHelper.ESIAPI.GetAllianceData(Reason, declaredAgainstId, true))?.name ?? (await APIHelper.ESIAPI.GetCorporationData(Reason, declaredAgainstId, true))?.name)
+                                                        : null;
+                                                    var hq = GetData("warHQ", data)?.Replace("<b>", "").Replace("</b>", "");
+
                                                     switch (notification.type)
                                                     {
                                                         case "WarAdopted":
                                                             color = new Color(0xFF0000);
-                                                            text = LM.Get("notifWarAdopted", corp);
+                                                            text = LM.Get("notifWarAdopted", declareByName, declareAgainstName);
                                                             image = Settings.Resources.ImgWarDeclared;
                                                             break;
                                                         case "WarAllyInherited":
@@ -814,12 +833,12 @@ namespace ThunderED.Modules
                                                             image = Settings.Resources.ImgWarInviteSent;
                                                             break;
                                                         case "WarConcordInvalidates":
-                                                            text = LM.Get("notifWarConcordInvalidates", corp);
+                                                            text = LM.Get("notifWarConcordInvalidates", declareByName, declareAgainstName);
                                                             image = Settings.Resources.ImgWarInvalidate;
                                                             break;
                                                         case "WarDeclared":
                                                             color = new Color(0xFF0000);
-                                                            text = LM.Get("notifWarDeclared", corp);
+                                                            text = LM.Get("notifWarDeclared", declareByName, declareAgainstName, hq);
                                                             image = Settings.Resources.ImgWarDeclared;
                                                             break;
                                                         case "WarHQRemovedFromSpace":
@@ -833,15 +852,15 @@ namespace ThunderED.Modules
                                                             image = Settings.Resources.ImgWarInviteSent;
                                                             break;
                                                         case "WarInvalid":
-                                                            text = LM.Get("notifWarInvalid", corp);
+                                                            text = LM.Get("notifWarInvalid", declareByName, declareAgainstName);
                                                             image = Settings.Resources.ImgWarInvalidate;
                                                             break;
                                                         case "WarRetracted":
-                                                            text = LM.Get("notifWarRetracted", corp);
+                                                            text = LM.Get("notifWarRetracted", declareByName, declareAgainstName);
                                                             image = Settings.Resources.ImgWarInvalidate;
                                                             break;
                                                         case "WarRetractedByConcord":
-                                                            text = LM.Get("notifWarRetractedByConcord", corp);
+                                                            text = LM.Get("notifWarRetractedByConcord", declareByName, declareAgainstName);
                                                             image = Settings.Resources.ImgWarInvalidate;
                                                             break;
                                                         default:
@@ -888,7 +907,7 @@ namespace ThunderED.Modules
                                                     var applicationText = string.Empty;
                                                     if(notification.type != "CharLeftCorpMsg")
                                                     {
-                                                        GetData("applicationText", data);
+                                                        //GetData("applicationText", data);
 
                                                         var sb = new StringBuilder();
                                                         foreach (var (key, value) in data)
@@ -928,8 +947,7 @@ namespace ThunderED.Modules
                                                     if (!string.IsNullOrEmpty(applicationText) && applicationText != "''")
                                                     {
                                                         applicationText = (await MailModule.PrepareBodyMessage(applicationText))[0];
-                                                        if (applicationText.StartsWith(@"\u"))
-                                                            applicationText = applicationText.ConvertToCyrillic();
+                                                        applicationText = applicationText.ConvertToCyrillic();
                                                         builder.WithDescription(applicationText);
                                                     }
 
@@ -1234,7 +1252,7 @@ namespace ThunderED.Modules
             }
             finally
             {
-                _passContracts.Clear();
+                _passNotifications.Clear();
             }
         }
 
